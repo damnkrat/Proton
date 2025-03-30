@@ -44,6 +44,7 @@
 #include <limits.h>
 #define _USE_GNU
 #include <dlfcn.h>
+#include <map>
 
 #pragma push_macro("_WIN32")
 #pragma push_macro("__cdecl")
@@ -162,13 +163,17 @@ static DWORD WINAPI create_steam_windows(void *arg)
 /* requires steam API to be initialized */
 static void setup_steam_registry(void)
 {
-    const char *ui_lang, *language, *languages, *locale = NULL;
+    const char *ui_lang;
     uint32 appid;
     char buf[256];
     HKEY key;
     LSTATUS status;
-    const int system_locale_appids[] = {
-        1284210 /* Guild Wars 2 */
+
+    // Map of AppIDs to the specific locale string they require.
+    // Add entries here ONLY for games that are confirmed to break
+    // without both LC_CTYPE and LC_MESSAGES being forced.
+    static const std::map<uint32, const char*> locale_overrides = {
+        // { appid_example, "fr_FR.UTF-8" } // Example entry
     };
 
     ui_lang = SteamUtils()->GetSteamUILanguage();
@@ -192,63 +197,26 @@ static void setup_steam_registry(void)
     }
     else WINE_ERR("Could not create key: %u\n", status);
 
-    language = SteamApps()->GetCurrentGameLanguage();
-    languages = SteamApps()->GetAvailableGameLanguages();
+    // Log game language info, but don't use it for default locale setting anymore
+    const char *language = SteamApps()->GetCurrentGameLanguage();
+    const char *languages = SteamApps()->GetAvailableGameLanguages();
     WINE_TRACE( "Game language %s, available %s\n", wine_dbgstr_a(language), wine_dbgstr_a(languages) );
 
-    if (strchr(languages, ',') == NULL) /* If there is a list of languages then respect that */
+    // Check if the current AppID requires a locale override
+    auto override_iter = locale_overrides.find(appid);
+    if (override_iter != locale_overrides.end())
     {
-        for (int i = 0; i < (sizeof(system_locale_appids) / sizeof(*system_locale_appids)); i++)
-        {
-            if (system_locale_appids[i] == appid)
-            {
-                WINE_TRACE("Not changing system locale for application %i\n",appid);
-                language = NULL;
-            }
-        }
+        // AppID found in the override map, apply the specific locale
+        const char *override_locale = override_iter->second;
+        WINE_FIXME( "Applying LC_CTYPE/LC_MESSAGES override (%s) for AppID %u due to game requirement. Non-ASCII input may be affected.\n", override_locale, appid );
+        setenv( "LC_CTYPE", override_locale, TRUE );
+        setenv( "LC_MESSAGES", override_locale, TRUE );
     }
-
-    if (!language) locale = NULL;
-    else if (!strcmp( language, "arabic" )) locale = "ar_001.UTF-8";
-    else if (!strcmp( language, "bulgarian" )) locale = "bg_BG.UTF-8";
-    else if (!strcmp( language, "schinese" )) locale = "zh_CN.UTF-8";
-    else if (!strcmp( language, "tchinese" )) locale = "zh_TW.UTF-8";
-    else if (!strcmp( language, "czech" )) locale = "cs_CZ.UTF-8";
-    else if (!strcmp( language, "danish" )) locale = "da_DK.UTF-8";
-    else if (!strcmp( language, "dutch" )) locale = "nl_NL.UTF-8";
-    else if (!strcmp( language, "english" )) locale = "en_US.UTF-8";
-    else if (!strcmp( language, "finnish" )) locale = "fi_FI.UTF-8";
-    else if (!strcmp( language, "french" )) locale = "fr_FR.UTF-8";
-    else if (!strcmp( language, "german" )) locale = "de_DE.UTF-8";
-    else if (!strcmp( language, "greek" )) locale = "el_GR.UTF-8";
-    else if (!strcmp( language, "hungarian" )) locale = "hu_HU.UTF-8";
-    else if (!strcmp( language, "italian" )) locale = "it_IT.UTF-8";
-    else if (!strcmp( language, "japanese" )) locale = "ja_JP.UTF-8";
-    else if (!strcmp( language, "koreana" )) locale = "ko_KR.UTF-8";
-    else if (!strcmp( language, "norwegian" )) locale = "nb_NO.UTF-8";
-    else if (!strcmp( language, "polish" )) locale = "pl_PL.UTF-8";
-    else if (!strcmp( language, "portuguese" )) locale = "pt_PT.UTF-8";
-    else if (!strcmp( language, "brazilian" )) locale = "pt_BR.UTF-8";
-    else if (!strcmp( language, "romanian" )) locale = "ro_RO.UTF-8";
-    else if (!strcmp( language, "russian" )) locale = "ru_RU.UTF-8";
-    else if (!strcmp( language, "spanish" )) locale = "es_ES.UTF-8";
-    else if (!strcmp( language, "latam" )) locale = "es_419.UTF-8";
-    else if (!strcmp( language, "swedish" )) locale = "sv_SE.UTF-8";
-    else if (!strcmp( language, "thai" )) locale = "th_TH.UTF-8";
-    else if (!strcmp( language, "turkish" )) locale = "tr_TR.UTF-8";
-    else if (!strcmp( language, "ukrainian" )) locale = "uk_UA.UTF-8";
-    else if (!strcmp( language, "vietnamese" )) locale = "vi_VN.UTF-8";
-    else WINE_FIXME( "Unsupported game language %s\n", wine_dbgstr_a(language) );
-
-    /* HACK: Bug 23597 Granado Espada Japan (1219160) launcher needs Japanese locale to display correctly */
-    if (appid == 1219160)
-        locale = "ja_JP.UTF-8";
-
-    if (locale)
+    else
     {
-        WINE_FIXME( "Game language %s, defaulting LC_CTYPE / LC_MESSAGES to %s.\n", wine_dbgstr_a(language), locale );
-        setenv( "LC_CTYPE", locale, FALSE );
-        setenv( "LC_MESSAGES", locale, FALSE );
+        // Default behavior for most games: Do NOT set LC_CTYPE or LC_MESSAGES based on Steam language
+        // to preserve keyboard input locale and avoid interfering with system defaults.
+        WINE_TRACE("Not setting LC_CTYPE or LC_MESSAGES based on game language to preserve keyboard input locale.\n");
     }
 }
 
